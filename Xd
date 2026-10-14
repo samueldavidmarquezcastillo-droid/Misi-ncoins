@@ -1,0 +1,384 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#050714">
+<title>NEON STRIKE</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050714;
+font-family:Arial,sans-serif;color:#eafaff;touch-action:none}
+canvas{display:block;width:100%;height:100%;touch-action:none}
+#hud{position:fixed;top:0;left:0;right:0;padding:12px;pointer-events:none}
+.row{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.brand{font-size:19px;font-weight:900;letter-spacing:2px;color:#52f5ff;
+text-shadow:0 0 14px #00cfff}
+.brand span{color:#ff4fba}
+.stats{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+.stat{background:#0a1226eF;border:1px solid #204768;border-radius:9px;
+padding:7px 10px;font-size:12px}
+.stat b{color:#59f6ff;font-size:15px}
+#healthWrap{height:7px;width:145px;border-radius:9px;background:#421c36;
+overflow:hidden;margin-top:6px}
+#health{height:100%;width:100%;background:#43ffbd;transition:width .15s}
+button{font:inherit;cursor:pointer;touch-action:manipulation}
+#pause{pointer-events:auto;background:#101c32;color:#6df8ff;
+border:1px solid #2a829f;border-radius:9px;padding:10px 12px}
+#message{position:fixed;top:31%;left:0;width:100%;text-align:center;
+font-size:13px;letter-spacing:3px;color:#6babc0;pointer-events:none}
+#overlay{position:fixed;inset:0;display:flex;align-items:center;
+justify-content:center;padding:22px;background:#020511d9;z-index:5}
+.panel{width:min(370px,100%);padding:27px 21px;border:1px solid #29c9ee;
+border-radius:20px;background:linear-gradient(145deg,#101c34,#080b19);
+text-align:center;box-shadow:0 0 40px #00bfff20}
+.logo{font-size:32px;font-weight:1000;letter-spacing:2px;color:#52f5ff;
+text-shadow:0 0 22px #00cfff}
+.logo span{color:#ff4fba}
+.subtitle{font-size:12px;letter-spacing:3px;color:#83a4bd;margin-top:8px}
+#desc{line-height:1.7;color:#c0d3e7;font-size:14px;margin:20px 0}
+.main{width:100%;padding:14px;border:0;border-radius:10px;color:#03101b;
+font-size:16px;font-weight:900;background:linear-gradient(90deg,#4bf5ff,#ad7aff)}
+.secondary{margin-top:9px;width:100%;padding:11px;border:1px solid #31506c;
+border-radius:10px;background:#0b1629;color:#c5e9f6}
+.note{font-size:11px;color:#66869c;margin-top:17px;line-height:1.5}
+#bottomHint{position:fixed;bottom:14px;left:0;width:100%;text-align:center;
+font-size:11px;color:#5b91a9;pointer-events:none}
+@media(min-width:700px){.brand{font-size:24px}.stat{font-size:14px}}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+ <div class="row">
+  <div>
+   <div class="brand">NEON <span>STRIKE</span></div>
+   <div class="stats">
+    <div class="stat">VIDA<div id="healthWrap"><div id="health"></div></div>
+     <span id="hp">100/100</span></div>
+    <div class="stat">PUNTOS<br><b id="score">0</b></div>
+    <div class="stat">OLEADA<br><b id="wave">1</b></div>
+    <div class="stat">RÉCORD<br><b id="best">0</b></div>
+   </div>
+  </div>
+  <button id="pause">Ⅱ</button>
+ </div>
+</div>
+<div id="message">SOBREVIVE A LOS ROBOTS</div>
+<div id="bottomHint">Mueve el joystick · Disparo automático</div>
+
+<div id="overlay">
+ <div class="panel">
+  <div class="logo">NEON <span>STRIKE</span></div>
+  <div class="subtitle">PROTOCOLO DE SUPERVIVENCIA</div>
+  <p id="desc">Elimina robots, sobrevive a las oleadas y consigue el récord.<br><br>
+  Mueve el joystick para esquivar. Tu arma dispara automáticamente al enemigo más cercano.</p>
+  <button class="main" id="play">▶ INICIAR MISIÓN</button>
+  <button class="secondary" id="sound">🔊 Sonido: activado</button>
+  <div class="note">JUEGO LOCAL · NO REQUIERE INTERNET</div>
+ </div>
+</div>
+
+<script>
+(()=>{
+"use strict";
+const $=id=>document.getElementById(id);
+const canvas=$("game"),ctx=canvas.getContext("2d");
+let W=innerWidth,H=innerHeight,D=1;
+let player=null,enemies=[],bullets=[],particles=[],stars=[];
+let score=0,wave=1,hp=100,best=0;
+let running=false,paused=false,over=false;
+let spawnRemaining=0,spawnClock=0,shotClock=0,elapsed=0;
+let last=0,shake=0,flash=0,soundOn=true,audio=null;
+const joy={active:false,id:null,dx:0,dy:0};
+const keys={};
+try{best=Number(localStorage.getItem("neonStrikeBest"))||0}catch(e){}
+$("best").textContent=best;
+
+function resize(){
+ W=innerWidth;H=innerHeight;D=Math.min(devicePixelRatio||1,2);
+ canvas.width=Math.round(W*D);canvas.height=Math.round(H*D);
+ ctx.setTransform(D,0,0,D,0,0);
+ stars=Array.from({length:Math.min(100,Math.floor(W*H/8000))},()=>({
+  x:Math.random()*W,y:Math.random()*H,r:Math.random()*1.4+.3,
+  a:Math.random()*6
+ }));
+ if(player){
+  player.x=Math.min(W-player.r,Math.max(player.r,player.x));
+  player.y=Math.min(H-player.r,Math.max(player.r,player.y));
+ }
+ draw();
+}
+addEventListener("resize",resize);
+
+function beep(freq=500,duration=.05,type="sine",vol=.025){
+ if(!soundOn)return;
+ try{
+  audio=audio||new(window.AudioContext||window.webkitAudioContext)();
+  if(audio.state==="suspended")audio.resume();
+  const o=audio.createOscillator(),g=audio.createGain();
+  o.type=type;o.frequency.value=freq;g.gain.value=vol;
+  o.connect(g);g.connect(audio.destination);
+  o.start();g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+duration);
+  o.stop(audio.currentTime+duration);
+ }catch(e){}
+}
+function reset(){
+ score=0;wave=1;hp=100;elapsed=0;shake=0;flash=0;
+ enemies=[];bullets=[];particles=[];
+ player={x:W/2,y:H/2,r:13,speed:225,inv:0};
+ spawnRemaining=5;spawnClock=.4;shotClock=.2;
+ running=true;paused=false;over=false;
+ joy.active=false;joy.dx=joy.dy=0;
+ $("overlay").style.display="none";$("pause").textContent="Ⅱ";
+ $("message").textContent="OLEADA 1 · SOBREVIVE";
+ last=performance.now();
+ updateHUD();
+ cancelAnimationFrame(raf);
+ raf=requestAnimationFrame(loop);
+ beep(600,.12,"triangle");
+}
+function updateHUD(){
+ $("score").textContent=score;
+ $("wave").textContent=wave;
+ $("hp").textContent=Math.ceil(hp)+"/100";
+ $("health").style.width=hp+"%";
+ $("health").style.background=hp>55?"#43ffbd":hp>25?"#ffd35b":"#ff477a";
+ $("best").textContent=best;
+}
+function endGame(){
+ running=false;over=true;joy.active=false;
+ if(score>best){
+  best=score;
+  try{localStorage.setItem("neonStrikeBest",String(best))}catch(e){}
+ }
+ updateHUD();
+ $("desc").innerHTML="MISIÓN TERMINADA<br><br>Puntuación: <b>"+score+
+ "</b><br>Oleada alcanzada: <b>"+wave+"</b><br>Récord: <b>"+best+"</b>";
+ $("play").textContent="↻ VOLVER A JUGAR";
+ $("overlay").style.display="flex";
+ beep(120,.4,"sawtooth",.04);
+}
+function spawn(){
+ const s=Math.floor(Math.random()*4);let x,y;
+ if(s===0){x=Math.random()*W;y=-25}
+ if(s===1){x=W+25;y=Math.random()*H}
+ if(s===2){x=Math.random()*W;y=H+25}
+ if(s===3){x=-25;y=Math.random()*H}
+ const heavy=wave>=3&&Math.random()<Math.min(.4,.15+wave*.01);
+ enemies.push({x,y,r:heavy?17:11,hp:heavy?3:1,
+  max:heavy?3:1,speed:(heavy?47:68)+Math.random()*22+wave*3,
+  color:heavy?"#ffad42":"#ff397e",damage:heavy?17:10,phase:Math.random()*7});
+}
+function target(){
+ let t=null,dist=Infinity;
+ for(const e of enemies){
+  const d=(e.x-player.x)**2+(e.y-player.y)**2;
+  if(d<dist){dist=d;t=e}
+ }
+ return t;
+}
+function particlesAt(x,y,color,n=9){
+ for(let i=0;i<n;i++){
+  const a=Math.random()*Math.PI*2,s=35+Math.random()*150;
+  particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,
+   life:.25+Math.random()*.4,max:.65,color,size:1+Math.random()*3});
+ }
+}
+function shoot(){
+ const e=target();if(!e)return;
+ const dx=e.x-player.x,dy=e.y-player.y,d=Math.hypot(dx,dy)||1;
+ bullets.push({x:player.x,y:player.y,vx:dx/d*470,vy:dy/d*470,
+  life:1.5,r:4});
+ particlesAt(player.x,player.y,"#4df6ff",2);
+ beep(720,.025,"square",.008);
+}
+function hurt(amount){
+ hp=Math.max(0,hp-amount);player.inv=.65;shake=6;flash=.2;
+ particlesAt(player.x,player.y,"#ff477a",12);
+ beep(150,.12,"sawtooth",.035);
+ if(hp<=0){updateHUD();endGame()}
+}
+function update(dt){
+ elapsed+=dt;shake=Math.max(0,shake-dt*24);flash=Math.max(0,flash-dt);
+ player.inv=Math.max(0,player.inv-dt);
+ let mx=joy.dx,my=joy.dy;
+ if(keys.ArrowLeft||keys.a)mx--;
+ if(keys.ArrowRight||keys.d)mx++;
+ if(keys.ArrowUp||keys.w)my--;
+ if(keys.ArrowDown||keys.s)my++;
+ let mag=Math.hypot(mx,my);if(mag>1){mx/=mag;my/=mag}
+ player.x=Math.max(player.r,Math.min(W-player.r,player.x+mx*player.speed*dt));
+ player.y=Math.max(player.r,Math.min(H-player.r,player.y+my*player.speed*dt));
+
+ shotClock-=dt;
+ if(shotClock<=0&&enemies.length){shoot();shotClock=.24}
+
+ spawnClock-=dt;
+ if(spawnRemaining>0&&spawnClock<=0){
+  spawn();spawnRemaining--;
+  spawnClock=Math.max(.23,.8-wave*.035);
+ }
+ for(let i=bullets.length-1;i>=0;i--){
+  const b=bullets[i];b.x+=b.vx*dt;b.y+=b.vy*dt;b.life-=dt;
+  let gone=b.life<=0||b.x<-40||b.x>W+40||b.y<-40||b.y>H+40;
+  for(let j=enemies.length-1;j>=0&&!gone;j--){
+   const e=enemies[j];
+   if(Math.hypot(b.x-e.x,b.y-e.y)<b.r+e.r){
+    e.hp--;gone=true;particlesAt(b.x,b.y,"#4df6ff",3);
+    if(e.hp<=0){
+     particlesAt(e.x,e.y,e.color,13);
+     score+=e.max===3?30:10;enemies.splice(j,1);
+     beep(350,.04,"triangle",.012);
+    }
+   }
+  }
+  if(gone)bullets.splice(i,1);
+ }
+ for(const e of enemies){
+  const dx=player.x-e.x,dy=player.y-e.y,d=Math.hypot(dx,dy)||1;
+  e.x+=dx/d*e.speed*dt;e.y+=dy/d*e.speed*dt;e.phase+=dt*3;
+  if(d<player.r+e.r&&player.inv<=0){hurt(e.damage);if(!running)return}
+ }
+ for(let i=particles.length-1;i>=0;i--){
+  const p=particles[i];p.x+=p.vx*dt;p.y+=p.vy*dt;
+  p.vx*=Math.pow(.08,dt);p.vy*=Math.pow(.08,dt);p.life-=dt;
+  if(p.life<=0)particles.splice(i,1);
+ }
+ if(spawnRemaining===0&&enemies.length===0){
+  wave++;spawnRemaining=wave+4;spawnClock=1;
+  hp=Math.min(100,hp+10);
+  $("message").textContent="OLEADA "+wave+" · NUEVA AMENAZA";
+  particlesAt(player.x,player.y,"#4df6ff",22);
+  beep(900,.15,"triangle",.035);
+ }
+ updateHUD();
+}
+function circle(x,y,r,color,fill=false){
+ ctx.save();ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=2;
+ ctx.shadowColor=color;ctx.shadowBlur=15;
+ ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);
+ if(fill)ctx.fill();else ctx.stroke();
+ ctx.restore();
+}
+function draw(){
+ ctx.clearRect(0,0,W,H);
+ ctx.fillStyle="#050714";ctx.fillRect(0,0,W,H);
+ ctx.save();
+ if(shake>0)ctx.translate((Math.random()-.5)*shake,(Math.random()-.5)*shake);
+ ctx.strokeStyle="#102037";ctx.lineWidth=1;
+ const step=38,off=(elapsed*5)%step;
+ for(let x=0;x<W;x+=step){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke()}
+ for(let y=-step;y<H+step;y+=step){ctx.beginPath();ctx.moveTo(0,y+off);ctx.lineTo(W,y+off);ctx.stroke()}
+ for(const s of stars){
+  ctx.globalAlpha=.25+.2*Math.sin(elapsed*2+s.a);
+  ctx.fillStyle="#6edfff";ctx.fillRect(s.x,s.y,s.r,s.r);
+ }
+ ctx.globalAlpha=1;
+ for(const b of bullets){
+  ctx.strokeStyle="#4df6ff";ctx.lineWidth=3;ctx.shadowColor="#4df6ff";ctx.shadowBlur=12;
+  ctx.beginPath();ctx.moveTo(b.x,b.y);ctx.lineTo(b.x-b.vx*.025,b.y-b.vy*.025);ctx.stroke();
+ }
+ ctx.shadowBlur=0;
+ for(const e of enemies){
+  circle(e.x,e.y,e.r,e.color);
+  circle(e.x,e.y,e.r*.48,e.color,true);
+  ctx.fillStyle="#fff";ctx.fillRect(e.x-3,e.y-2,6,3);
+  if(e.max>1){
+   ctx.fillStyle="#3b1c2c";ctx.fillRect(e.x-15,e.y-e.r-9,30,4);
+   ctx.fillStyle="#ffb84e";ctx.fillRect(e.x-15,e.y-e.r-9,30*e.hp/e.max,4);
+  }
+ }
+ if(player){
+  ctx.save();
+  if(player.inv>0&&Math.floor(elapsed*20)%2===0)ctx.globalAlpha=.3;
+  const a=target();
+  if(a){
+   ctx.strokeStyle="#3cf4ff55";ctx.lineWidth=1;
+   ctx.beginPath();ctx.moveTo(player.x,player.y);ctx.lineTo(a.x,a.y);ctx.stroke();
+  }
+  circle(player.x,player.y,player.r,"#42f6ff");
+  circle(player.x,player.y,player.r*.5,"#caffff",true);
+  ctx.restore();
+ }
+ for(const p of particles){
+  ctx.globalAlpha=Math.max(0,p.life/p.max);
+  ctx.fillStyle=p.color;ctx.fillRect(p.x,p.y,p.size,p.size);
+ }
+ ctx.globalAlpha=1;
+ // Joystick
+ const bx=72,by=H-78;
+ ctx.fillStyle="#10243bc9";ctx.strokeStyle="#37eaff88";ctx.lineWidth=2;
+ ctx.beginPath();ctx.arc(bx,by,43,0,Math.PI*2);ctx.fill();ctx.stroke();
+ ctx.fillStyle="#41edff";ctx.shadowColor="#41edff";ctx.shadowBlur=12;
+ ctx.beginPath();ctx.arc(bx+joy.dx*28,by+joy.dy*28,16,0,Math.PI*2);ctx.fill();
+ ctx.shadowBlur=0;ctx.restore();
+ if(flash>0){ctx.fillStyle="rgba(255,30,80,.16)";ctx.fillRect(0,0,W,H)}
+}
+let raf=0;
+function loop(now){
+ if(!running||paused)return;
+ const dt=Math.min((now-last)/1000,.033);last=now;
+ update(dt);draw();
+ if(running&&!paused)raf=requestAnimationFrame(loop);
+}
+function pauseGame(){
+ if(!running&&!paused)return;
+ if(!paused){
+  paused=true;cancelAnimationFrame(raf);joy.active=false;joy.dx=joy.dy=0;
+  $("pause").textContent="▶";
+  $("desc").textContent="Partida pausada. Pulsa continuar cuando estés listo.";
+  $("play").textContent="▶ CONTINUAR";
+  $("overlay").style.display="flex";
+ }else{
+  paused=false;$("overlay").style.display="none";$("pause").textContent="Ⅱ";
+  last=performance.now();raf=requestAnimationFrame(loop);
+ }
+}
+$("play").onclick=()=>{
+ if(paused&&!over){pauseGame();return}
+ reset();
+};
+$("pause").onclick=pauseGame;
+$("sound").onclick=()=>{
+ soundOn=!soundOn;
+ $("sound").textContent=soundOn?"🔊 Sonido: activado":"🔇 Sonido: desactivado";
+ if(soundOn)beep(650,.07);
+};
+canvas.addEventListener("pointerdown",e=>{
+ if(!running||paused||joy.active)return;
+ if(e.clientX<W*.48&&e.clientY>H*.48){
+  joy.active=true;joy.id=e.pointerId;joy.x=e.clientX;joy.y=e.clientY;
+  joy.dx=joy.dy=0;
+  try{canvas.setPointerCapture(e.pointerId)}catch(_){}
+ }
+});
+canvas.addEventListener("pointermove",e=>{
+ if(!joy.active||e.pointerId!==joy.id)return;
+ const dx=e.clientX-joy.x,dy=e.clientY-joy.y,d=Math.hypot(dx,dy)||1;
+ joy.dx=dx/Math.max(d,38);joy.dy=dy/Math.max(d,38);
+});
+function release(e){
+ if(joy.active&&e.pointerId===joy.id){
+  joy.active=false;joy.id=null;joy.dx=joy.dy=0;
+ }
+}
+canvas.addEventListener("pointerup",release);
+canvas.addEventListener("pointercancel",release);
+addEventListener("keydown",e=>{
+ keys[e.key]=true;
+ if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key))e.preventDefault();
+});
+addEventListener("keyup",e=>keys[e.key]=false);
+addEventListener("blur",()=>{Object.keys(keys).forEach(k=>keys[k]=false)});
+document.addEventListener("visibilitychange",()=>{
+ if(document.hidden&&running&&!paused)pauseGame();
+});
+resize();
+draw();
+})();
+</script>
+</body>
+</html>
